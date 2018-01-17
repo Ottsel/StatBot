@@ -137,11 +137,12 @@ func getVoiceLog(g *discordgo.Guild) VoiceStateArray {
 		voiceDataFile, _ := os.Open(filePath["VOICEPATH"])
 		decoder := json.NewDecoder(voiceDataFile)
 		decodeErr := decoder.Decode(&voiceData)
-		if err(decodeErr, "Failed to decode voice data file, creating new file and renaming corrupt file: \""+filePath["VOICEPATH"]+"_CORRUPT_"+time.Now().Format(dateFormat)+".txt\"") {
+		if err(decodeErr, "Failed to decode voice data file, renaming corrupt file: \""+filePath["VOICEPATH"]+"_CORRUPT_"+time.Now().Format(dateFormat)+".txt\"") {
 			closeErr := voiceDataFile.Close()
 			err(closeErr, "")
 			renameErr := os.Rename(filePath["VOICEPATH"], filePath["VOICEPATH"]+"_CORRUPT_"+time.Now().Format(dateFormat)+".txt")
 			err(renameErr, "")
+			log.Println("Please restart bot to reinitialize voice data file")
 		}
 	}
 	return voiceData
