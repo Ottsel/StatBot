@@ -30,83 +30,76 @@ const (
 )
 
 //Converts a voice state into, much cooler, voice state data.
-func voiceStateToData(s *discordgo.Session, vs *discordgo.VoiceState) VoiceStateData {
-	var vsd VoiceStateData
+func voiceStateToData(s *discordgo.Session, g *discordgo.Guild, vs *discordgo.VoiceState, isInit bool) {
+	vsd := VoiceStateData{"", vs.UserID, "-", "", vs.ChannelID, time.Now().Format(logTimeFormat), "-"}
 	user, e := s.User(vs.UserID)
-	if err(e, "") {
+	if vs.UserID != "" {
+		if err(e, "") {
+			vsd.Action = "Error"
+			writeToVoiceLog(g, vsd)
+		}
+		vsd.Username = user.Username
 	}
 	if vs.ChannelID != "" {
 		channel, e := s.Channel(vs.ChannelID)
 		if err(e, "") {
+		} else {
+			vsd.Channel = channel.Name
 		}
-		vsd = VoiceStateData{user.Username, user.ID, "-", channel.Name, channel.ID, time.Now().Format(logTimeFormat), "-"}
-	} else {
-		vsd = VoiceStateData{user.Username, user.ID, "-", "", vs.ChannelID, time.Now().Format(logTimeFormat), "-"}
 	}
-	return vsd
+
+	last := getLastVoiceState(g, vs.UserID)
+	if vsd.ChannelID == "" {
+		vsd.Action = "Disconnected"
+		if last.ChannelID != g.AfkChannelID {
+			vsd.Duration = getDuration(vsd.Time, last.Time)
+		}
+		vsd.ChannelID = last.ChannelID
+		vsd.Channel = last.Channel
+		writeToVoiceLog(g, vsd)
+	} else if vsd.ChannelID == g.AfkChannelID {
+		vsd.Action = "AFK"
+		writeToVoiceLog(g, vsd)
+	} else if isInit || last.Action == "placeholder" {
+		vsd.Action = "Joined"
+		writeToVoiceLog(g, vsd)
+	} else if last.Action == "Disconnected" {
+		vsd.Action = "Joined"
+		writeToVoiceLog(g, vsd)
+	} else if vsd.ChannelID != last.ChannelID {
+		vsd.Action = "Changed Channel"
+		if last.ChannelID != g.AfkChannelID {
+			vsd.Duration = getDuration(vsd.Time, last.Time)
+		}
+		writeToVoiceLog(g, VoiceStateData{vsd.Username, vsd.UserID, vsd.Action, last.Channel, last.ChannelID, vsd.Time, vsd.Duration})
+
+		vsd.Action = "Joined"
+		vsd.Time = time.Now().Format(logTimeFormat)
+		vsd.Duration = "-"
+		writeToVoiceLog(g, vsd) //Write another entry to log which channel the user moved to.
+	}
 }
 
-//Sorts voice state data and writes it to file.
-func writeToVoiceLog(s *discordgo.Session, g *discordgo.Guild, vsd VoiceStateData, isInit bool) {
+//Writes voice state data to log.
+func writeToVoiceLog(g *discordgo.Guild, vsd VoiceStateData) {
 	setPath(g)
-	for _, m := range g.Members {
-		if m.User.ID == vsd.UserID {
 
-			channelID := vsd.ChannelID
-			channel := vsd.Channel
-			action := vsd.Action
-			duration := vsd.Duration
-
-			if action == "-" {
-				last := getLastVoiceState(g, m.User.ID)
-				if vsd.ChannelID == "" {
-					action = "Disconnected"
-					if last.ChannelID != g.AfkChannelID {
-						duration = getDuration(vsd.Time, last.Time)
-					}
-					channelID = last.ChannelID
-					channel = last.Channel
-				} else if vsd.ChannelID == g.AfkChannelID {
-					action = "AFK"
-				} else if isInit || last.Action == "placeholder" {
-					action = "Joined"
-				} else if last.Action == "Disconnected" {
-					action = "Joined"
-				} else if vsd.ChannelID != last.ChannelID {
-					action = "Changed Channel"
-					if last.ChannelID != g.AfkChannelID {
-						duration = getDuration(vsd.Time, last.Time)
-					}
-					channelID = last.ChannelID
-					channel = last.Channel
-				} else {
-					return
-				}
-			}
-			//Create a JSON Object based on voice state data.
-			newObjectText := "{\n\t\"Array\":[\n\t\t{\n\t\t\t\"Username\": \"" + m.User.Username + "\",\n\t\t\t\"UserID\": \"" + m.User.ID + "\",\n\t\t\t\"Action\": \"" + action + "\",\n\t\t\t\"Channel\": \"" + channel + "\",\n\t\t\t\"ChannelID\": \"" + channelID + "\",\n\t\t\t\"Time\": \"" + vsd.Time + "\",\n\t\t\t\"Duration\": \"" + duration + "\"\n\t\t},"
-			logText, readErr := ioutil.ReadFile(filePath["VOICEPATH"])
-			if err(readErr, "Failed to read voice log file") {
-				return
-			}
-
-			//Replace the beginning of the voice data file with a new object. This way the JSON decoder can read the most recent logs first.
-			newLog := strings.Replace(string(logText[:]), "{\n\t\"Array\":[", newObjectText, 1)
-			writeErr := ioutil.WriteFile(filePath["VOICEPATH"], []byte(newLog), os.ModePerm)
-			if err(writeErr, "Failed to store voice state data for user: "+m.User.Username) {
-				return
-			} else {
-				log.Println("")
-				log.Println("Stored voice state data for user: " + m.User.Username)
-			}
-			//If the user changed voice channels, write a forced entry containing their current channel.
-			if action == "Changed Channel" {
-				newVSD := VoiceStateData{vsd.Username, vsd.UserID, "Joined", vsd.Channel, vsd.ChannelID, time.Now().Format(logTimeFormat), "-"}
-				writeToVoiceLog(s, g, newVSD, false)
-			}
-		}
+	//Create a JSON Object based on voice state data.
+	newObjectText := "{\n\t\"Array\":[\n\t\t{\n\t\t\t\"Username\": \"" + vsd.Username + "\",\n\t\t\t\"UserID\": \"" + vsd.UserID + "\",\n\t\t\t\"Action\": \"" + vsd.Action + "\",\n\t\t\t\"Channel\": \"" + vsd.Channel + "\",\n\t\t\t\"ChannelID\": \"" + vsd.ChannelID + "\",\n\t\t\t\"Time\": \"" + vsd.Time + "\",\n\t\t\t\"Duration\": \"" + vsd.Duration + "\"\n\t\t},"
+	logText, readErr := ioutil.ReadFile(filePath["VOICEPATH"])
+	if err(readErr, "Failed to read voice log file") {
+		return
 	}
-	return
+
+	//Replace the beginning of the voice data file with a new object. This way the JSON decoder can read the most recent data first.
+	newLog := strings.Replace(string(logText[:]), "{\n\t\"Array\":[", newObjectText, 1)
+	writeErr := ioutil.WriteFile(filePath["VOICEPATH"], []byte(newLog), os.ModePerm)
+	if err(writeErr, "Failed to store voice state data for user: "+vsd.Username) {
+		return
+	} else {
+		log.Println("")
+		log.Println("Stored voice state data for user: " + vsd.Username)
+	}
 }
 
 //Calculates the difference between the join and disconnect time of a user. Useful for usage metrics.
@@ -115,7 +108,11 @@ func getDuration(currentTime string, lastTime string) string {
 	err(e, "Failed to parse \"Time\" value. Surely you didn't mess with the data, did you?")
 	last, e := time.Parse(logTimeFormat, lastTime)
 	err(e, "Failed to parse \"Time\" value. Surely you didn't mess with the data, did you?")
-	return current.Sub(last).String()
+	duration := current.Sub(last)
+	if duration.Seconds() < 60 {
+		return "under a minute"
+	}
+	return duration.String()
 }
 
 //Gets the last voice state of the specified user.
@@ -126,7 +123,7 @@ func getLastVoiceState(g *discordgo.Guild, userID string) VoiceStateData {
 		}
 	}
 
-	return getVoiceLog(g).VoiceStateLog[0] //If no state exists for this user, return placeholder state.
+	return getVoiceLog(g).VoiceStateLog[0] //If no previous voice state data exists for this user, return placeholder data.
 }
 
 //Decodes voice log file for the specified guild.
@@ -172,12 +169,12 @@ func ghostbusting(s *discordgo.Session, g *discordgo.Guild) {
 				pass = true
 			}
 		}
-		if !pass {
+		if !pass && latest.UserID != "placeholder" {
 			newVSD := VoiceStateData{latest.Username, latest.UserID, "Disconnected", latest.Channel, latest.ChannelID, time.Now().Format(logTimeFormat), "-"}
-			writeToVoiceLog(s, g, newVSD, false)
+			writeToVoiceLog(g, newVSD)
 		}
 	}
 	for _, vs := range g.VoiceStates {
-		writeToVoiceLog(s, g, voiceStateToData(s, vs), true)
+		voiceStateToData(s, g, vs, true)
 	}
 }
